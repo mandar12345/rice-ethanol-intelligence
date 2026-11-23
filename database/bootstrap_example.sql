@@ -1,0 +1,11 @@
+-- Run AFTER schema.sql. Replace UUIDs with actual IDs returned by the inserts.
+-- 1) Create the three users in Supabase Dashboard > Authentication > Users > Add user.
+-- 2) Create your organization and plant:
+INSERT INTO public.organizations (organization_name) VALUES ('POC Ethanol Company') RETURNING organization_id;
+-- Use the returned organization_id below:
+-- INSERT INTO public.plants (organization_id, plant_name, capacity_klpd)
+-- VALUES ('<ORGANIZATION_UUID>', 'Main Plant', 100) RETURNING plant_id;
+-- 3) Add a profile for each Auth user. Copy each user's UUID from Authentication > Users.
+-- INSERT INTO public.user_profiles (user_id, organization_id, plant_id, display_name, role)
+-- VALUES ('<AUTH_USER_UUID>', '<ORGANIZATION_UUID>', '<PLANT_UUID>', 'Management User', 'management');
+-- Repeat for role 'production' and role 'accounts'.
