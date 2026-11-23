@@ -5,26 +5,52 @@ import streamlit as st
 from supabase import Client, create_client
 
 
+
 def _setting(name: str) -> str | None:
+    """Read a setting from Streamlit Cloud Secrets or local environment."""
+    import os
+    import streamlit as st
+
+    # First: Streamlit secrets (Cloud and local secrets.toml)
     try:
-        value = st.secrets.get(name)
-        if value:
-            return str(value)
+        value = st.secrets[name]
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    except (KeyError, FileNotFoundError):
+        pass
     except Exception:
         pass
-    return os.getenv(name)
+
+    # Second: environment variables (.env locally)
+    value = os.getenv(name)
+    if value and value.strip():
+        return value.strip()
+
+    return None
 
 
 def get_supabase_client() -> Client:
     url = _setting("SUPABASE_URL")
     key = _setting("SUPABASE_ANON_KEY")
-    if not url or not key:
-        raise RuntimeError(
-            "Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY "
-            "to .env locally or Streamlit app Secrets in the cloud."
-        )
-    return create_client(url, key)
 
+    # Safe diagnostic: never display credentials.
+    if not url or not key:
+        missing = []
+        if not url:
+            missing.append("SUPABASE_URL")
+        if not key:
+            missing.append("SUPABASE_ANON_KEY")
+
+        raise RuntimeError(
+            "Supabase configuration missing: "
+            + ", ".join(missing)
+            + ". Check Streamlit Cloud → App Settings → Secrets."
+        )
+
+    if not url.startswith("https://"):
+        raise RuntimeError("SUPABASE_URL must start with https://")
+
+    return create_client(url, key)
 
 def _profile_for_user(client: Client, user_id: str) -> dict:
     result = (
