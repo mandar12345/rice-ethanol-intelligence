@@ -80,7 +80,20 @@ def require_login() -> None:
         st.stop()
 
 
-def get_profile_context(client, profile: dict) -> tuple[list[dict], dict]:
+
+def get_profile_context(client, profile: dict) -> tuple[list[dict], dict, str]:
+    # Fetch organization name using the authenticated user's organization ID
+    org_response = (
+        client.table("organizations")
+        .select("organization_id, organization_name")
+        .eq("organization_id", profile["organization_id"])
+        .single()
+        .execute()
+    )
+
+    organization_name = org_response.data["organization_name"]
+
+    # Fetch plants belonging to this organization
     response = (
         client.table("plants")
         .select("plant_id, plant_name, capacity_klpd, timezone")
@@ -88,22 +101,42 @@ def get_profile_context(client, profile: dict) -> tuple[list[dict], dict]:
         .order("plant_name")
         .execute()
     )
+
     plants = response.data or []
+
     if profile["role"] not in {"management", "admin"}:
-        plants = [p for p in plants if p["plant_id"] == profile.get("plant_id")]
+        plants = [
+            p for p in plants
+            if p["plant_id"] == profile.get("plant_id")
+        ]
+
     if not plants:
-        raise RuntimeError("No plant is assigned or visible to this account. Contact your administrator.")
+        raise RuntimeError(
+            "No plant is assigned or visible to this account. "
+            "Contact your administrator."
+        )
+
     if profile["role"] in {"management", "admin"}:
         selected_name = st.session_state.get("selected_plant_name")
-        selected = next((p for p in plants if p["plant_name"] == selected_name), plants[0])
+        selected = next(
+            (p for p in plants if p["plant_name"] == selected_name),
+            plants[0]
+        )
+
         names = [p["plant_name"] for p in plants]
-        chosen = st.sidebar.selectbox("Plant", names, index=names.index(selected["plant_name"]))
+        chosen = st.sidebar.selectbox(
+            "Plant",
+            names,
+            index=names.index(selected["plant_name"])
+        )
+
         st.session_state["selected_plant_name"] = chosen
         selected = next(p for p in plants if p["plant_name"] == chosen)
+
     else:
         selected = plants[0]
-        st.sidebar.caption(f"Plant: {selected['plant_name']}")
-    return plants, selected
+
+    return plants, selected, organization_name
 
 
 def fetch_rows(client, table: str, date_col: str, plant_id: str) -> pd.DataFrame:
@@ -128,6 +161,27 @@ def fetch_rows(client, table: str, date_col: str, plant_id: str) -> pd.DataFrame
         frame[date_col] = pd.to_datetime(frame[date_col], errors="coerce")
     return frame
 
+
+def clean_display_data(frame: pd.DataFrame) -> pd.DataFrame:
+    """Remove internal identifiers from customer-facing tables."""
+    if frame.empty:
+        return frame
+
+    internal_columns = [
+        "organization_id",
+        "plant_id",
+        "production_id",
+        "inventory_id",
+        "finance_id",
+    ]
+
+    return frame.drop(
+        columns=[
+            col for col in internal_columns
+            if col in frame.columns
+        ],
+        errors="ignore"
+    )
 
 def safe_number(value: float, label: str) -> float:
     number = float(value)
@@ -252,7 +306,11 @@ def render_finance_form(client, profile: dict, plant: dict) -> None:
 def render_data_entry(client, profile: dict, plant: dict) -> None:
     role = profile["role"]
     st.title("Daily plant data entry")
-    st.caption(f"{plant['plant_name']} · {plant['capacity_klpd']:g} KLPD")
+    st.caption(
+        f"Organization: {st.session_state['organization_name']} "
+        f"· Plant: {plant['plant_name']} "
+        f"· Capacity: {plant['capacity_klpd']:g} KLPD"
+    )
     if role in {"production", "management", "admin"}:
         prod_tab, inv_tab = st.tabs(["Production", "Inventory"])
         with prod_tab:
@@ -267,7 +325,14 @@ def render_data_entry(client, profile: dict, plant: dict) -> None:
 def render_dashboard(client, profile: dict, plant: dict) -> None:
     role = profile["role"]
     st.title("🏭 Rice Ethanol Intelligence")
-    st.caption(f"{plant['plant_name']} · {plant['capacity_klpd']:g} KLPD · Live database-backed view")
+
+    st.markdown(
+        f"**Organization:** {st.session_state['organization_name']}  "
+        f"| **Plant:** {plant['plant_name']}  "
+        f"| **Capacity:** {plant['capacity_klpd']:g} KLPD"
+    )
+
+    st.caption("Live database-backed view")
     if st.button("Refresh dashboard data", use_container_width=False):
         st.rerun()
     try:
@@ -282,6 +347,11 @@ def render_dashboard(client, profile: dict, plant: dict) -> None:
     except Exception as exc:
         st.error(f"Unable to load cloud data: {exc}")
         st.stop()
+
+    # Remove internal IDs from customer-facing dashboard tables
+    production = clean_display_data(production)
+    inventory = clean_display_data(inventory)
+    finance = clean_display_data(finance)
 
     dates = []
     for frame, col in ((production, "operating_date"), (inventory, "operating_date"), (finance, "entry_date")):
@@ -374,7 +444,8 @@ def main() -> None:
         logout()
         st.rerun()
     try:
-        _, plant = get_profile_context(client, profile)
+        _, plant, organization_name = get_profile_context(client, profile)
+        st.session_state["organization_name"] = organization_name
     except Exception as exc:
         st.error(f"Unable to load assigned plant: {exc}")
         st.stop()
